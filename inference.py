@@ -130,8 +130,8 @@ def main():
     model.eval()
     torch.set_grad_enabled(False)
 
-    model = model.module
     model = nn.DataParallel(model)
+    model = model.module
 
     # overwrite default values of voxel_dim_test
     if args.voxel_dim[0] != -1:
