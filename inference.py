@@ -126,6 +126,7 @@ def main():
     info_files = parse_splits_list(args.scenes)
 
     model = VoxelNet.load_from_checkpoint(args.model)
+    model = nn.DataParallel(model.module)
     model = model.cuda().eval()
     torch.set_grad_enabled(False)
 
@@ -142,7 +143,6 @@ def main():
         save_path = '%s_%d'%(save_path, args.num_frames)
     os.makedirs(save_path, exist_ok=True)
 
-    model = nn.DataParallel(model)
     for i, info_file in enumerate(info_files):
         # run model on each scene
         process(info_file, model, args.num_frames, save_path, i, len(info_files))
