@@ -126,8 +126,9 @@ def main():
     info_files = parse_splits_list(args.scenes)
 
     model = VoxelNet.load_from_checkpoint(args.model)
+    model = model.cuda()
     model = nn.DataParallel(model)
-    model = model.cuda().eval()
+    model.eval()
     torch.set_grad_enabled(False)
 
     model = model.module
