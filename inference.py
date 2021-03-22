@@ -19,6 +19,7 @@ import os
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 from atlas.data import SceneDataset, parse_splits_list
 from atlas.model import VoxelNet
@@ -125,6 +126,7 @@ def main():
     info_files = parse_splits_list(args.scenes)
 
     model = VoxelNet.load_from_checkpoint(args.model)
+    model = nn.DataParallel(model)
     model = model.cuda().eval()
     torch.set_grad_enabled(False)
 
