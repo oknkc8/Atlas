@@ -126,9 +126,11 @@ def main():
     info_files = parse_splits_list(args.scenes)
 
     model = VoxelNet.load_from_checkpoint(args.model)
-    model = nn.DataParallel(model.module)
+    model = nn.DataParallel(model)
     model = model.cuda().eval()
     torch.set_grad_enabled(False)
+
+    model = model.module
 
     # overwrite default values of voxel_dim_test
     if args.voxel_dim[0] != -1:
