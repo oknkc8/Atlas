@@ -127,11 +127,11 @@ def main():
 
     model = VoxelNet.load_from_checkpoint(args.model)
     model = model.cuda()
-    model = nn.DataParallel(model)
     model.eval()
     torch.set_grad_enabled(False)
 
     model = model.module
+    model = nn.DataParallel(model)
 
     # overwrite default values of voxel_dim_test
     if args.voxel_dim[0] != -1:
