@@ -18,12 +18,16 @@ import os
 
 import pytorch_lightning as pl
 import torch
+from torch import nn
 
 from atlas.config import get_parser, get_cfg
 from atlas.logger import AtlasLogger
-from atlas.model import VoxelNet
+#from atlas.model import VoxelNet
+from atlas.model_pytorch import VoxelNet
 
+from tqdm import tqdm
 
+"""
 # FIXME: should not be necessary, but something is remaining
 # in memory between train and val
 class CudaClearCacheCallback(pl.Callback):
@@ -61,4 +65,92 @@ if __name__ == "__main__":
         amp_level='O1')
     
     trainer.fit(model)
+"""
 
+if __name__ == "__main__":
+    args = get_parser().parse_args()
+
+    cfg = get_cfg(args)
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.TRAINER.GPUS)
+
+    model = VoxelNet(cfg.convert_to_dict())
+
+    model = nn.DataParallel(model)
+
+    save_path = os.path.join(cfg.LOG_DIR, cfg.TRAINER.NAME, cfg.TRAINER.VERSION)
+    logger = AtlasLogger(save_path)
+
+    # Set Dataloader & Optimizer
+    train_loader = model.train_dataloader()
+    val_loader = model.val_dataloader()
+
+    # Set Optimizer
+    optimizer, scheduler = model.configure_optimizers()
+
+    for epoch in range(cfg.TRAINER.EPOCH):
+
+        print('Training...')
+        model.train()
+        for i, batch in tqdm(enumerate(train_loader)):
+            outputs, losses = model.forward(batch)
+
+            total_loss = 0
+            for key, loss in losses.items():
+                total_loss += loss
+                logger.loss_writer.add_scalar('train_' + key, loss, len(train_loader)*epoch + i+1)
+            
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+
+            if (i+1) % cfg.LOG_STEP == 0:
+                print("Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(train_loader), total_loss), end=' ')
+                for key, loss in losses.items():
+                    print("%s: %.5f" % (key, loss), end=' ')
+                print()
+
+                pred_tsdfs = model.postprocess(outputs)
+                trgt_tsdfs = model.postprocess(batch)
+
+                logger.mesh_writer.save_mesh(pred_tsdfs[0], 'train_pred.ply')
+                logger.mesh_writer.save_mesh(trgt_tsdfs[0], 'train_trgt.ply')
+        
+        print('\nValidating...')
+        model.eval()
+        loss_avg = {}
+        with torch.no_grad():
+            for i, batch in tqdm(enumerate(val_loader)):
+                outputs, losses = model.forward(batch)
+
+                total_loss = 0
+                for key, loss in losses.items():
+                    total_loss += loss
+                    if loss_avg.get(key) == None:
+                        loss_avg[key] = total_loss
+                    else:
+                        loss_avg[key] += total_loss
+
+                    logger.loss_writer.add_scalar('val_' + key, loss, len(val_loader)*epoch + i+1)
+                
+                if loss_avg.get('total_loss') == None:
+                    loss_avg['total_loss'] = total_loss
+                else:
+                    loss_avg['total_loss'] += total_loss
+                
+                print("Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(train_loader), total_loss), end=' ')
+                for key, loss in losses.items():
+                    print("%s: %.5f" % (key, loss), end=' ')
+                print()
+
+                pred_tsdfs = model.postprocess(outputs)
+                trgt_tsdfs = model.postprocess(batch)
+
+                logger.mesh_writer.save_mesh(pred_tsdfs[0], batch['scene'][0]+'_pred.ply')
+                logger.mesh_writer.save_mesh(trgt_tsdfs[0], batch['scene'][0]+'_trgt.ply')
+            
+            print("[Valid Avg] Epoch:%3d" % (epoch+1, i+1), end=' ')
+            for key, loss in loss_avg.items():
+                loss_avg[key] /= len(val_loader)
+                print("%s: %.5f" % (key, loss_avg[key]), end=' ')
+            print('\n')
