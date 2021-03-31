@@ -85,8 +85,10 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
 class VoxelNet(nn.Module):
     """ Network architecture implementing ATLAS (https://arxiv.org/pdf/2003.10432.pdf)"""
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, device):
         super().__init__()
+
+        self.device = device
 
         # see config.py for details
         self.hparams = hparams
@@ -100,7 +102,6 @@ class VoxelNet(nn.Module):
         self.backbone3d = build_backbone3d(cfg)
         self.heads2d = PixelHeads(cfg, self.backbone2d_stride)
         self.heads3d = VoxelHeads(cfg)
-        self.heads3d_
 
         # other hparams
         self.pixel_mean = torch.Tensor(cfg.MODEL.PIXEL_MEAN).view(-1, 1, 1)
@@ -223,11 +224,11 @@ class VoxelNet(nn.Module):
 
         self.initialize_volume()
 
-        image = batch['image']
-        projection = batch['projection']
+        image = batch['image'].to(self.device)
+        projection = batch['projection'].to(self.device)
 
         # get targets if they are in the batch
-        targets3d = {key:value for key, value in batch.items() if key[:3]=='vol'}
+        targets3d = {key:value for key, value.to(self.device) in batch.items() if key[:3]=='vol'}
         targets3d = targets3d if targets3d else None
         
         # transpose batch and time so we can accumulate sequentially

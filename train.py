@@ -73,12 +73,16 @@ if __name__ == "__main__":
     cfg = get_cfg(args)
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.TRAINER.GPUS)
+    device = torch.device("cuda")
 
-    model = VoxelNet(cfg.convert_to_dict())
+    model = VoxelNet(cfg.convert_to_dict(), device).to(device)
 
     model = nn.DataParallel(model)
 
     save_path = os.path.join(cfg.LOG_DIR, cfg.TRAINER.NAME, cfg.TRAINER.VERSION)
+    checkpoint_path = os.path.join(save_path, 'ckpts')
+    os.makedirs(checkpoint_path, exist_ok=True)
+
     logger = AtlasLogger(save_path)
 
     # Set Dataloader & Optimizer
@@ -87,6 +91,8 @@ if __name__ == "__main__":
 
     # Set Optimizer
     optimizer, scheduler = model.configure_optimizers()
+
+    valid_min_loss = 1e10
 
     for epoch in range(cfg.TRAINER.EPOCH):
 
@@ -138,9 +144,9 @@ if __name__ == "__main__":
                 else:
                     loss_avg['total_loss'] += total_loss
                 
-                print("Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(train_loader), total_loss), end=' ')
+                print("Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(train_loader), total_loss.item()), end=' ')
                 for key, loss in losses.items():
-                    print("%s: %.5f" % (key, loss), end=' ')
+                    print("%s: %.5f" % (key, loss.item()), end=' ')
                 print()
 
                 pred_tsdfs = model.postprocess(outputs)
@@ -152,5 +158,24 @@ if __name__ == "__main__":
             print("[Valid Avg] Epoch:%3d" % (epoch+1, i+1), end=' ')
             for key, loss in loss_avg.items():
                 loss_avg[key] /= len(val_loader)
-                print("%s: %.5f" % (key, loss_avg[key]), end=' ')
+                print("%s: %.5f" % (key, loss_avg[key].item()), end=' ')
             print('\n')
+
+        if loss_avg['total_loss'].item() < valid_min_loss:
+            valid_min_loss = loss_avg['total_loss'].item()
+            
+            torch.save({
+                    'model' : model.state_dict(),
+                    'epoch' : epoch,
+                    'cfg' : model.cfg
+                },
+                os.path.join(checkpoint_path, 'best_model.ckpt')
+            )
+
+        torch.save({
+                'model' : model.state_dict(),
+                'epoch' : epoch,
+                'cfg' : model.cfg
+            },
+            os.path.join(checkpoint_path, str(epoch+1) + '.ckpt')
+        )

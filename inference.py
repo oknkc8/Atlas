@@ -22,8 +22,23 @@ import torch
 import torch.nn as nn
 
 from atlas.data import SceneDataset, parse_splits_list
-from atlas.model import VoxelNet
+#from atlas.model import VoxelNet
+from atlas.model_pytorch import VoxelNet
 import atlas.transforms as transforms
+
+def load_model(model, ckpt_file, netname=None):
+    if netname is not None:
+        pretrained_dict = torch.load(ckpt_file)[netname]
+    else:
+        pretrained_dict = torch.load(ckpt_file)
+    model.load_state_dict(pretrained_dict)
+
+def load_cfg(ckpt_file, name=None):
+    if name is not None:
+        cfg = torch.load(ckpt_file)[name]
+    else:
+        cfg = torch.load(ckpt_file)['cfg']
+    return cfg
 
 
 def process(info_file, model, num_frames, save_path, total_scenes_index, total_scenes_count):
@@ -119,19 +134,27 @@ def main():
                         help="number of frames to use (-1 for all)")
     parser.add_argument("--voxel_dim", nargs=3, default=[-1,-1,-1], type=int,
                         help="override voxel dim")
+    parser.add_argument("--gpus", default='0', type=str)
     args = parser.parse_args()
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpus)
+    device = torch.device("cuda")
 
     # get all the info_file.json's from the command line
     # .txt files contain a list of info_file.json's
     info_files = parse_splits_list(args.scenes)
 
-    model = VoxelNet.load_from_checkpoint(args.model)
-    model = model.cuda()
+    cfg = load_cfg(args.model, name='cfg')
+
+    model = VoxelNet(cfg, device).to(device)
+    load_model(model, args.model, netname='model')
+    #model = VoxelNet.load_from_checkpoint(args.model)
+
+    #model = model.cuda()
     model.eval()
     torch.set_grad_enabled(False)
 
     model = nn.DataParallel(model)
-    model = model.module
 
     # overwrite default values of voxel_dim_test
     if args.voxel_dim[0] != -1:
