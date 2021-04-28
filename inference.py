@@ -19,26 +19,16 @@ import os
 
 import numpy as np
 import torch
-import torch.nn as nn
+import pytorch_lightning as pl
+
+import numpy as np
+import matplotlib.pyplot as plt
+from mayavi import mlab
+from tqdm import tqdm
 
 from atlas.data import SceneDataset, parse_splits_list
-#from atlas.model import VoxelNet
-from atlas.model_pytorch import VoxelNet
+from atlas.model import VoxelNet
 import atlas.transforms as transforms
-
-def load_model(model, ckpt_file, netname=None):
-    if netname is not None:
-        pretrained_dict = torch.load(ckpt_file)[netname]
-    else:
-        pretrained_dict = torch.load(ckpt_file)
-    model.load_state_dict(pretrained_dict)
-
-def load_cfg(ckpt_file, name=None):
-    if name is not None:
-        cfg = torch.load(ckpt_file)[name]
-    else:
-        cfg = torch.load(ckpt_file)['cfg']
-    return cfg
 
 
 def process(info_file, model, num_frames, save_path, total_scenes_index, total_scenes_count):
@@ -81,32 +71,99 @@ def process(info_file, model, num_frames, save_path, total_scenes_index, total_s
     ])
     dataset.transform = transform
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=None,
-                                             batch_sampler=None, num_workers=2)
+                                             batch_sampler=None, num_workers=32)
 
     scene = dataset.info['scene']
 
     model.initialize_volume()
     torch.cuda.empty_cache()
 
-    for j, d in enumerate(dataloader):
+    # trainer = pl.Trainer(
+    #     distributed_backend='dp',
+    #     benchmark=False,
+    #     gpus=[5],
+    #     precision=32)
+    #     #num_sanitey_val_steps=0)
+
+    # print(total_scenes_index,
+    #       total_scenes_count,
+    #       dataset.info['dataset'],
+    #       scene,
+    #       len(dataloader)
+    # )
+
+    # model.test_offset = offset.cuda()
+    # model.save_path = save_path
+    # model.scene = scene
+    # trainer.test(model, test_dataloaders=dataloader)
+
+    anime = None
+    for j, d in tqdm(enumerate(dataloader)):
+        # if j < 700:
+        #     continue
 
         # logging progress
-        if j%25==0:
-            print(total_scenes_index,
-                  total_scenes_count,
-                  dataset.info['dataset'],
-                  scene,
-                  j,
-                  len(dataloader)
-            )
+        # if j%25==0:
+        #     print(total_scenes_index,
+        #           total_scenes_count,
+        #           dataset.info['dataset'],
+        #           scene,
+        #           j,
+        #           len(dataloader)
+        #     )
 
+        #print(d['projection'].unsqueeze(0).shape, d['image'].unsqueeze(0).shape)
         model.inference1(d['projection'].unsqueeze(0).cuda(),
                          image=d['image'].unsqueeze(0).cuda())
+
+        
+
+        if j == len(dataloader)-1 or (j%100 == 0 and j>=1100):
+            volume = model.valid[0][0].cpu().numpy().astype(np.uint8)
+            anime = mlab.pipeline.scalar_field(volume)
+            mlab.pipeline.volume(anime)
+            mlab.axes()
+            mlab.show()
+
+            volume = model.volume[0][0].cpu().numpy().astype(np.uint8)
+            anime = mlab.pipeline.scalar_field(volume)
+            mlab.pipeline.volume(anime)
+            mlab.axes()
+            mlab.show()
+
+        outputs, losses = model.inference2()
+
+        tsdf_pred = model.postprocess(outputs)[0]
+        #print(tsdf_pred.tsdf_vol.shape)
+
+        # TODO: set origin in model... make consistent with offset above?
+        tsdf_pred.origin = offset.view(1,3).cuda()
+        
+        if j == len(dataloader)-1 or (j%100 == 0 and j>=1100):
+            volume = tsdf_pred.tsdf_vol.cpu().numpy().astype(np.uint8)
+            anime = mlab.pipeline.scalar_field(volume)
+            mlab.pipeline.volume(anime)
+            mlab.axes()
+            mlab.show()
+
+        # if 'semseg' in tsdf_pred.attribute_vols:
+        #     #mesh_pred = tsdf_pred.get_mesh('semseg')
+        #     mesh_pred = tsdf_pred.get_mesh()
+
+        #     # save vertex attributes seperately since trimesh doesn't
+        #     np.savez(os.path.join(save_path, '%s_attributes.npz'%scene), 
+        #             **mesh_pred.vertex_attributes)
+        # else:
+        #     mesh_pred = tsdf_pred.get_mesh()
+
+        # tsdf_pred.save(os.path.join(save_path, '%s_%d.npz'%(scene,j)))
+        # mesh_pred.export(os.path.join(save_path, '%s_%d.ply'%(scene,j)))
+
     outputs, losses = model.inference2()
 
     tsdf_pred = model.postprocess(outputs)[0]
 
-    # TODO: set origin in model... make consistent with offset above?
+    # # TODO: set origin in model... make consistent with offset above?
     tsdf_pred.origin = offset.view(1,3).cuda()
    
 
@@ -134,27 +191,15 @@ def main():
                         help="number of frames to use (-1 for all)")
     parser.add_argument("--voxel_dim", nargs=3, default=[-1,-1,-1], type=int,
                         help="override voxel dim")
-    parser.add_argument("--gpus", default='0', type=str)
     args = parser.parse_args()
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpus)
-    device = torch.device("cuda")
 
     # get all the info_file.json's from the command line
     # .txt files contain a list of info_file.json's
     info_files = parse_splits_list(args.scenes)
 
-    cfg = load_cfg(args.model, name='cfg')
-
-    model = VoxelNet(cfg, device).to(device)
-    load_model(model, args.model, netname='model')
-    #model = VoxelNet.load_from_checkpoint(args.model)
-
-    #model = model.cuda()
-    model.eval()
+    model = VoxelNet.load_from_checkpoint(args.model)
+    model = model.cuda().eval()
     torch.set_grad_enabled(False)
-
-    model = nn.DataParallel(model)
 
     # overwrite default values of voxel_dim_test
     if args.voxel_dim[0] != -1:
@@ -162,13 +207,15 @@ def main():
     # TODO: implement voxel_dim_test
     model.voxel_dim_val = model.voxel_dim_test
 
-    model_name = os.path.splitext(os.path.split(args.model)[1])[0]
+    #model_name = os.path.splitext(os.path.split(args.model)[1])[0]
+    model_name = 'EuRoC_MH_01_EASY'
     save_path = os.path.join(model.cfg.LOG_DIR, model.cfg.TRAINER.NAME,
                              model.cfg.TRAINER.VERSION, 'test_'+model_name)
     if args.num_frames>-1:
         save_path = '%s_%d'%(save_path, args.num_frames)
     os.makedirs(save_path, exist_ok=True)
 
+    print(info_files)
     for i, info_file in enumerate(info_files):
         # run model on each scene
         process(info_file, model, args.num_frames, save_path, i, len(info_files))
