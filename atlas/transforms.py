@@ -39,6 +39,11 @@ class ToTensor(object):
     def __call__(self, data):
         for frame in data['frames']:
             image = np.array(frame['image'])
+            
+            if len(image.shape) < 3:
+                image = np.expand_dims(image, -1)
+                image = np.concatenate((image, image, image), axis=-1)
+
             frame['image'] = torch.as_tensor(image).float().permute(2, 0, 1)
             frame['intrinsics'] = torch.as_tensor(frame['intrinsics'])
             frame['pose'] = torch.as_tensor(frame['pose'])
