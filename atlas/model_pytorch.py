@@ -17,13 +17,9 @@
 import itertools
 import os
 
-import pytorch_lightning as pl
 import torch
 from torch import nn
 from torch.nn import functional as F
-import numpy as np
-import matplotlib.pyplot as plt
-import cv2
 
 from atlas.config import CfgNode
 from atlas.data import ScenesDataset, collate_fn, parse_splits_list
@@ -63,23 +59,12 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
 
     coords = coordinates(voxel_dim, device).unsqueeze(0).expand(batch,-1,-1) # bx3xhwd
     world = coords.type_as(projection) * voxel_size + origin.to(device).unsqueeze(2)
-    world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1)
+    world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1) # homogeneous
     
-    torch.set_printoptions(sci_mode=False)
-    # print(projection.shape)
-    # print(projection)
-    # print('-'*30)
     camera = torch.bmm(projection, world)
-    #print('camera shape:', camera.shape)
     px = (camera[:,0,:]/camera[:,2,:]).round().type(torch.long)
     py = (camera[:,1,:]/camera[:,2,:]).round().type(torch.long)
     pz = camera[:,2,:]
-
-    # print(px)    
-    # print(py)
-    # print(pz)
-    # print('='*30)
-    # print()
 
     # voxels in view frustrum
     height, width = features.size()[2:]
@@ -97,11 +82,13 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
     return volume, valid
 
 
-class VoxelNet(pl.LightningModule):
+class VoxelNet(nn.Module):
     """ Network architecture implementing ATLAS (https://arxiv.org/pdf/2003.10432.pdf)"""
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, device):
         super().__init__()
+
+        self.device = device
 
         # see config.py for details
         self.hparams = hparams
@@ -124,8 +111,7 @@ class VoxelNet(pl.LightningModule):
         self.voxel_dim_train = cfg.VOXEL_DIM_TRAIN
         self.voxel_dim_val = cfg.VOXEL_DIM_VAL
         self.voxel_dim_test = cfg.VOXEL_DIM_TEST
-        #self.origin = torch.tensor([0, 0, 0]).view(1,3)
-        self.origin = torch.tensor([-3, -3, -2]).view(1,3)
+        self.origin = torch.tensor([0,0,0]).view(1,3)
 
         self.batch_size_train = cfg.DATA.BATCH_SIZE_TRAIN
         self.num_frames_train = cfg.DATA.NUM_FRAMES_TRAIN
@@ -137,12 +123,8 @@ class VoxelNet(pl.LightningModule):
         self.voxel_types = cfg.MODEL.HEADS3D.HEADS
         self.voxel_sizes = [int(cfg.VOXEL_SIZE*100)*2**i for i in 
                             range(len(cfg.MODEL.BACKBONE3D.LAYERS_DOWN)-1)]
-        
-        self.test_offset = 0
-        self.test_save_path = 0
-        self.test_scene = 0
 
-        #self.initialize_volume()
+        self.initialize_volume()
 
 
     def initialize_volume(self):
@@ -160,7 +142,7 @@ class VoxelNet(pl.LightningModule):
         """ Normalizes the RGB images to the input range"""
         return (x - self.pixel_mean.type_as(x)) / self.pixel_std.type_as(x)
 
-    def inference1(self, projection, image=None, feature=None):
+    def feature_accumulation(self, projection, image=None, feature=None):
         """ Backprojects image features into 3D and accumulates them.
 
         This is the first half of the network which is run on every frame.
@@ -181,67 +163,14 @@ class VoxelNet(pl.LightningModule):
         assert ((image is not None and feature is None) or 
                 (image is None and feature is not None))
 
-        image_ori = image
         if feature is None:
             image = self.normalizer(image)
             feature = self.backbone2d(image)
-        
-        ##########################################
-        def returnCAM(image, feature):
-            # feature_blobs = []
-            # def hook_feature(module, input, output):
-            #     feature_blobs.append(output.cpu().numpy())
-
-            # print(self.backbone2d._modules['1']._modules['p5']._modules.get('5'))
-            
-            # self.backbone2d._modules.get('Conv2d').register_forward_hook(hook_feature)
-            # params = list(self.backbone2d.parameters())
-            # weight_softmax = np.squeeze(params[-2].cpu().data.numpy)
-            # print(len(feature_blobs))
-            # print(feature_blobs[0].shape)
-            size_upsample = (image.shape[-2], image.shape[-1])
-            plt.figure()
-
-            cams = feature[0].cpu().numpy()
-            img = image[0].cpu().numpy().astype(np.uint8)
-            img = np.transpose(img, (1,2,0))
-    
-            for idx, cam in enumerate(cams):
-                if idx<24: continue
-                #if idx>=16: break
-                cam = cam - np.min(cam)
-                cam_img = cam / np.max(cam)
-                cam_img = np.uint8(255 * (1-cam_img))
-                #print(cam_img.shape)
-                heatmap = cv2.applyColorMap(cv2.resize(cam_img, (size_upsample[1], size_upsample[0])), cv2.COLORMAP_JET)
-                #heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-                result = heatmap * 0.4 + img * 0.6
-                result = result.astype(np.uint8)
-                #result = img
-                plt.subplot(2, 4, idx-23)
-                plt.imshow(result)
-            plt.show()
-            
-        #returnCAM(image_ori, feature)
-
-        ##########################################
 
         # backbone2d reduces the size of the images so we 
         # change intrinsics to reflect this
-
-        # print()
-        # print(projection.shape)
-        # print(projection)
         projection = projection.clone()
-        #self.backbone2d_stride = 40
-
-        """ 크기 조절을 위해 projection matrix의
-            transform 부분을 1/2으로 변경  """
-        #projection[:,:,-1] = projection[:,:,-1] / 2
-
         projection[:,:2,:] = projection[:,:2,:] / self.backbone2d_stride
-        # print(projection)
-        # print('-'*30)
 
         if self.training:
             voxel_dim = self.voxel_dim_train
@@ -255,17 +184,9 @@ class VoxelNet(pl.LightningModule):
             valid.detach_()
 
         self.volume = self.volume + volume
-        #self.volume = volume
         self.valid = self.valid + valid
-        #self.valid = valid
 
-        #print(self.volume.shape, self.valid.shape)
-
-        #print(self.valid.type(), valid.type())
-        #print(self.valid, self.valid.sum())
-        #print(self.volume)
-
-    def inference2(self, targets=None):
+    def refine_3d_cnn(self, targets=None):
         """ Refines accumulated features and regresses output TSDF.
 
         This is the second half of the network. It should be run once after
@@ -279,10 +200,9 @@ class VoxelNet(pl.LightningModule):
             tuple of dicts ({outputs}, {losses})
                 if targets is None, losses is empty
         """
+
         volume = self.volume/self.valid
-        
-        #print(self.volume)
-        #print(self.valid, self.valid.sum())
+
         # remove nans (where self.valid==0)
         volume = volume.transpose(0,1)
         volume[:,self.valid.squeeze(1)==0]=0
@@ -293,68 +213,54 @@ class VoxelNet(pl.LightningModule):
 
 
     def forward(self, batch):
-        """ Wraps inference1() and inference2() into a single call.
+        """ Wraps feature_accumulation() and refine_3d_cnn() into a single call.
 
         Args:
             batch: a dict from the dataloader
 
         Returns:
-            see self.inference2
+            see self.refine_3d_cnn
         """
 
         self.initialize_volume()
 
-        image = batch['image']
-        projection = batch['projection']
+        image = batch['image'].to(self.device)
+        projection = batch['projection'].to(self.device)
 
         # get targets if they are in the batch
-        targets3d = {key:value for key, value in batch.items() if key[:3]=='vol'}
+        targets3d = {key:value for key, value.to(self.device) in batch.items() if key[:3]=='vol'}
         targets3d = targets3d if targets3d else None
-        # TODO other 2d targets
-        targets2d = {'semseg':batch['semseg']} if 'semseg' in batch else None
-
-        #TODO: run heads2d in inference1
-        outputs2d, losses2d = {}, {}
-
+        
         # transpose batch and time so we can accumulate sequentially
         images = image.transpose(0,1)
         projections = projection.transpose(0,1)
 
         if (not self.batch_backbone2d_time) or (not self.training) or self.finetune3d:
             # run images through 2d cnn sequentially and backproject and accumulate
+            # no use batchnorm => normalize each image
             for image, projection in zip(images, projections):
-                self.inference1(projection, image=image)
+                self.feature_accumulation(projection, image=image)
 
         else:
             # run all images through 2d cnn together to share batchnorm stats
+            # use batchnorm => shape: [B,3,h,w] -> [B*3,h,w] => normalize as batch
             image = images.reshape(images.shape[0]*images.shape[1], *images.shape[2:])
             image = self.normalizer(image)
             features = self.backbone2d(image)
-
-            # run 2d heads
-            if targets2d is not None:
-                targets2d = {
-                    key: value.transpose(0,1).view(
-                        images.shape[0]*images.shape[1], *value.shape[2:])
-                    for key, value in targets2d.items()}
-            outputs2d, losses2d = self.heads2d(features, targets2d)
 
             # reshape back
             features = features.view(images.shape[0],
                                      images.shape[1],
                                      *features.shape[1:])
-            outputs2d = {
-                key:value.transpose(0,1).reshape(
-                    images.shape[0], images.shape[1], *value.shape[1:]) 
-                for key, value in outputs2d.items()}
-
+        
             for projection, feature in zip(projections, features):
-                self.inference1(projection, feature=feature)
+                self.feature_accumulation(projection, feature=feature)
 
         # run 3d cnn
-        outputs3d, losses3d = self.inference2(targets3d)
+        outputs3d, losses3d = self.refine_3d_cnn(targets3d)
 
-        return {**outputs2d, **outputs3d}, {**losses2d, **losses3d}
+        #return {**outputs2d, **outputs3d}, {**losses2d, **losses3d}
+        return outputs3d, losses3d
 
 
     def postprocess(self, batch):
@@ -491,37 +397,10 @@ class VoxelNet(pl.LightningModule):
         avg_loss = sum(avg_losses.values())
         return {'val_loss': avg_loss, 'log': avg_losses}
 
-    def test_step(self, batch, batch_idx):
-        projection = batch['projection']
-        image = batch['image']
-
-        #print(projection.shape, image.shape)
-
-        #print(batch_idx)
-
-        self.inference1(projection, image=image)
-
-        #print(self.volume, self.valid)
-
-        return {}
-
-    def test_epoch_end(self, outputs):
-        #print(self.volume, self.valid)
-        outputs, losses = self.inference2()
-
-        tsdf_pred = self.postprocess(outputs)[0]
-
-        tsdf_pred.origin = self.test_offset.view(1,3)
-
-        mesh_pred = tsdf_pred.get_mesh()
-
-        tsdf_pred.save(os.path.join(self.save_path, '%s.npz'%self.scene))
-        mesh_pred.export(os.path.join(self.save_path, '%s.ply'%self.scene))
-
 
     def configure_optimizers(self):
-        optimizers = []
-        schedulers = []
+        # optimizers = []
+        # schedulers = []
 
         # allow for different learning rates between pretrained layers 
         # (resnet backbone) and new layers (everything else).
@@ -538,7 +417,7 @@ class VoxelNet(pl.LightningModule):
             optimizer = torch.optim.Adam([
                 {'params': params_backbone2d, 'lr': lr_backbone2d},
                 {'params': params_rest, 'lr': lr}])
-            optimizers.append(optimizer)
+            #optimizers.append(optimizer)
 
         else:
             raise NotImplementedError(
@@ -549,17 +428,17 @@ class VoxelNet(pl.LightningModule):
             scheduler = torch.optim.lr_scheduler.StepLR(
                 optimizer, self.cfg.SCHEDULER.STEP_LR.STEP_SIZE,
                 gamma=self.cfg.SCHEDULER.STEP_LR.GAMMA)
-            schedulers.append(scheduler)
+            #schedulers.append(scheduler)
 
         elif self.cfg.SCHEDULER.TYPE != 'None':
             raise NotImplementedError(
                 'optimizer %s not supported'%self.cfg.OPTIMIZER.TYPE)
                 
-        return optimizers, schedulers
+        #return optimizers, schedulers
+        return optimizer, scheduler
 
 
 
 
     
-
 
