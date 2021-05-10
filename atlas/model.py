@@ -66,20 +66,20 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
     world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1)
     
     torch.set_printoptions(sci_mode=False)
-    print(projection.shape)
-    print(projection)
-    print('-'*30)
+    # print(projection.shape)
+    # print(projection)
+    # print('-'*30)
     camera = torch.bmm(projection, world)
     #print('camera shape:', camera.shape)
     px = (camera[:,0,:]/camera[:,2,:]).round().type(torch.long)
     py = (camera[:,1,:]/camera[:,2,:]).round().type(torch.long)
     pz = camera[:,2,:]
 
-    print(px)    
-    print(py)
-    print(pz)
-    print('='*30)
-    print()
+    # print(px)    
+    # print(py)
+    # print(pz)
+    # print('='*30)
+    # print()
 
     # voxels in view frustrum
     height, width = features.size()[2:]
@@ -124,8 +124,8 @@ class VoxelNet(pl.LightningModule):
         self.voxel_dim_train = cfg.VOXEL_DIM_TRAIN
         self.voxel_dim_val = cfg.VOXEL_DIM_VAL
         self.voxel_dim_test = cfg.VOXEL_DIM_TEST
-        #self.origin = torch.tensor([5, 0, 0]).view(1,3)
-        self.origin = torch.tensor([0, 0, 0]).view(1,3)
+        #self.origin = torch.tensor([0, 0, 0]).view(1,3)
+        self.origin = torch.tensor([-3, -3, -2]).view(1,3)
 
         self.batch_size_train = cfg.DATA.BATCH_SIZE_TRAIN
         self.num_frames_train = cfg.DATA.NUM_FRAMES_TRAIN
@@ -228,8 +228,20 @@ class VoxelNet(pl.LightningModule):
 
         # backbone2d reduces the size of the images so we 
         # change intrinsics to reflect this
+
+        # print()
+        # print(projection.shape)
+        # print(projection)
         projection = projection.clone()
+        #self.backbone2d_stride = 40
+
+        """ 크기 조절을 위해 projection matrix의
+            transform 부분을 1/2으로 변경  """
+        #projection[:,:,-1] = projection[:,:,-1] / 2
+
         projection[:,:2,:] = projection[:,:2,:] / self.backbone2d_stride
+        # print(projection)
+        # print('-'*30)
 
         if self.training:
             voxel_dim = self.voxel_dim_train

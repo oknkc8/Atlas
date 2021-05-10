@@ -101,6 +101,8 @@ def process(info_file, model, num_frames, save_path, total_scenes_index, total_s
     for j, d in tqdm(enumerate(dataloader)):
         # if j < 700:
         #     continue
+        if j%10 != 0:
+            continue
 
         # logging progress
         # if j%25==0:
@@ -118,7 +120,7 @@ def process(info_file, model, num_frames, save_path, total_scenes_index, total_s
 
         
 
-        if j == len(dataloader)-1 or (j%100 == 0 and j>=1100):
+        if j == len(dataloader)-1:# or (j%100 == 0):
             volume = model.valid[0][0].cpu().numpy().astype(np.uint8)
             anime = mlab.pipeline.scalar_field(volume)
             mlab.pipeline.volume(anime)
@@ -139,25 +141,25 @@ def process(info_file, model, num_frames, save_path, total_scenes_index, total_s
         # TODO: set origin in model... make consistent with offset above?
         tsdf_pred.origin = offset.view(1,3).cuda()
         
-        if j == len(dataloader)-1 or (j%100 == 0 and j>=1100):
+        if j == len(dataloader)-1:# or (j%100 == 0):
             volume = tsdf_pred.tsdf_vol.cpu().numpy().astype(np.uint8)
             anime = mlab.pipeline.scalar_field(volume)
             mlab.pipeline.volume(anime)
             mlab.axes()
             mlab.show()
 
-        # if 'semseg' in tsdf_pred.attribute_vols:
-        #     #mesh_pred = tsdf_pred.get_mesh('semseg')
-        #     mesh_pred = tsdf_pred.get_mesh()
+        if 'semseg' in tsdf_pred.attribute_vols:
+            #mesh_pred = tsdf_pred.get_mesh('semseg')
+            mesh_pred = tsdf_pred.get_mesh()
 
-        #     # save vertex attributes seperately since trimesh doesn't
-        #     np.savez(os.path.join(save_path, '%s_attributes.npz'%scene), 
-        #             **mesh_pred.vertex_attributes)
-        # else:
-        #     mesh_pred = tsdf_pred.get_mesh()
+            # save vertex attributes seperately since trimesh doesn't
+            np.savez(os.path.join(save_path, '%s_attributes.npz'%scene), 
+                    **mesh_pred.vertex_attributes)
+        else:
+            mesh_pred = tsdf_pred.get_mesh()
 
-        # tsdf_pred.save(os.path.join(save_path, '%s_%d.npz'%(scene,j)))
-        # mesh_pred.export(os.path.join(save_path, '%s_%d.ply'%(scene,j)))
+        tsdf_pred.save(os.path.join(save_path, '%s_%d.npz'%(scene,j)))
+        mesh_pred.export(os.path.join(save_path, '%s_%d.ply'%(scene,j)))
 
     outputs, losses = model.inference2()
 
@@ -208,7 +210,11 @@ def main():
     model.voxel_dim_val = model.voxel_dim_test
 
     #model_name = os.path.splitext(os.path.split(args.model)[1])[0]
-    model_name = 'EuRoC_MH_01_EASY'
+    model_name = 'EuRoC_VC_01_EASY_scale_0.5'
+    #model_name = 'EuRoC_MH_01_scale_new_0.02'
+    #model_name = 'sample_scale_new_test'
+    #model_name = 'kitti_scale_new_0.01'
+    #model_name = 'ICL_NUIM_scale_1'
     save_path = os.path.join(model.cfg.LOG_DIR, model.cfg.TRAINER.NAME,
                              model.cfg.TRAINER.VERSION, 'test_'+model_name)
     if args.num_frames>-1:
@@ -221,4 +227,4 @@ def main():
         process(info_file, model, args.num_frames, save_path, i, len(info_files))
 
 if __name__ == "__main__":
-    main()
+    
