@@ -142,7 +142,7 @@ class VoxelNet(pl.LightningModule):
         self.test_save_path = 0
         self.test_scene = 0
 
-        self.initialize_volume()
+        #self.initialize_volume()
 
 
     def initialize_volume(self):
