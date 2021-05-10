@@ -30,6 +30,8 @@ from atlas.datasets.sample import prepare_sample_scene
 import atlas.transforms as transforms
 from atlas.tsdf import TSDFFusion, TSDF, coordinates, depth_to_world
 
+from tqdm import tqdm
+
 
 def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
                vol_prcnt=.995, vol_margin=1.5, fuse_semseg=False, device=0,
@@ -250,7 +252,7 @@ def prepare_scannet(path, path_meta, i=0, n=1, test_only=False, max_depth=3):
     if i==0:
         prepare_scannet_splits(path, path_meta)
 
-    for scene in scenes:
+    for scene in tqdm(scenes):
         prepare_scannet_scene(scene, path, path_meta)
         for voxel_size in [4,8,16]:
             fuse_scene(path_meta, scene, voxel_size, device=i%8, max_depth=max_depth)

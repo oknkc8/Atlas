@@ -99,12 +99,19 @@ def prepare_scannet_scene(scene, path, path_meta, verbose=2):
 
     # get camera intrinsics
     # we use color camera intrinsics and resize depth to match
-    with open(os.path.join(path, folder, scene, '%s.txt' % scene)) as info_f:
-        info = [line.rstrip().split(' = ') for line in info_f]
-        info = {key:value for key, value in info}
+    #with open(os.path.join(path, folder, scene, '%s.txt' % scene)) as info_f:
+    with open(os.path.join(path, folder, scene, 'intrinsic', 'intrinsic_color.txt')) as info_f:
+        # info = [line.rstrip().split(' = ') for line in info_f]
+        # info = {key:value for key, value in info}
+        # intrinsics = [
+        #     [float(info['fx_color']), 0, float(info['mx_color'])],
+        #     [0, float(info['fy_color']), float(info['my_color'])],
+        #     [0, 0, 1]]
+        info = [line.rstrip().split(' ') for line in info_f]
+        #info = {key:value for key, value in info}
         intrinsics = [
-            [float(info['fx_color']), 0, float(info['mx_color'])],
-            [0, float(info['fy_color']), float(info['my_color'])],
+            [float(info[0][0]), 0, float(info[0][2])],
+            [0, float(info[1][1]), float(info[1][2])],
             [0, 0, 1]]
 
 
