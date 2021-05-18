@@ -93,7 +93,7 @@ def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
                                               batch_sampler=None, num_workers=4)
 
     pts = []
-    for i, frame in enumerate(dataloader1):
+    for i, frame in tqdm(enumerate(dataloader1)):
         projection = frame['projection'].to(device)
         depth = frame['depth'].to(device)
         depth[depth>max_depth]=0
@@ -247,7 +247,7 @@ def prepare_scannet(path, path_meta, i=0, n=1, test_only=False, max_depth=3):
     scenes += sorted([os.path.join('scans_test', scene)
                       for scene in os.listdir(os.path.join(path, 'scans_test'))])
 
-    scenes = scenes[i::n]
+    scenes = scenes[(i%4)::n]
 
     if i==0:
         prepare_scannet_splits(path, path_meta)
@@ -323,7 +323,7 @@ if __name__ == "__main__":
 
     i=args.i
     n=args.n
-    assert 0<=i and i<n
+    assert 0<=(i%4) and (i%4)<n
 
     if args.dataset == 'sample':
         scenes = ['sample1']
