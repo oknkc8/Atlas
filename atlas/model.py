@@ -66,20 +66,11 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
     world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1)
     
     torch.set_printoptions(sci_mode=False)
-    # print(projection.shape)
-    # print(projection)
-    # print('-'*30)
     camera = torch.bmm(projection, world)
     #print('camera shape:', camera.shape)
     px = (camera[:,0,:]/camera[:,2,:]).round().type(torch.long)
     py = (camera[:,1,:]/camera[:,2,:]).round().type(torch.long)
     pz = camera[:,2,:]
-
-    # print(px)    
-    # print(py)
-    # print(pz)
-    # print('='*30)
-    # print()
 
     # voxels in view frustrum
     height, width = features.size()[2:]
@@ -90,6 +81,83 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
                          device=device)
     for b in range(batch):
         volume[b,:,valid[b]] = features[b,:,py[b,valid[b]], px[b,valid[b]]]
+
+    volume = volume.view(batch, channels, nx, ny, nz)
+    valid = valid.view(batch, 1, nx, ny, nz)
+
+    return volume, valid
+
+def backproject_subvoxel(voxel_dim, voxel_size, origin, projection, features):
+    """ Takes 2d features and fills them along rays in a 3d volume
+
+    This function implements eqs. 1,2 in https://arxiv.org/pdf/2003.10432.pdf
+    Each pixel in a feature image corresponds to a ray in 3d.
+    We fill all the voxels along the ray with that pixel's features.
+
+    Args:
+        voxel_dim: size of voxel volume to construct (nx,ny,nz)
+        voxel_size: metric size of each voxel (ex: .04m)
+        origin: origin of the voxel volume (xyz position of voxel (0,0,0))
+        projection: bx4x3 projection matrices (intrinsics@extrinsics)
+        features: bxcxhxw  2d feature tensor to be backprojected into 3d
+
+    Returns:
+        volume: b x c x nx x ny x nz 3d feature volume
+        valid:  b x 1 x nx x ny x nz volume.
+                Each voxel contains a 1 if it projects to a pixel
+                and 0 otherwise (not in view frustrum of the camera)
+    """
+
+    batch = features.size(0)
+    channels = features.size(1)
+    device = features.device
+    nx, ny, nz = voxel_dim
+
+    coords = coordinates(voxel_dim, device).unsqueeze(0).expand(batch,-1,-1) # bx3xhwd
+    world = coords.type_as(projection) * voxel_size + origin.to(device).unsqueeze(2)
+    world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1)
+    
+    print('\nCoords: ', coords.shape)
+    print('World: ', world.shape)
+
+    print('Projection Matrix: ', projection.shape)
+
+    #torch.set_printoptions(sci_mode=False)
+    camera = torch.bmm(projection, world)
+
+    print('camera: ', camera.shape)
+
+    px = (camera[:,0,:]/camera[:,2,:]).round().type(torch.long)
+    py = (camera[:,1,:]/camera[:,2,:]).round().type(torch.long)
+    pz = camera[:,2,:]
+
+    print('px: ', px.shape)
+    print('py: ', py.shape)
+    print('pz: ', pz.shape)
+
+    print('px element: ', (px <= px[0,0]).sum())
+
+    # px = px - px[0,0]
+    # py = py - py[0,0]
+    # pz = pz - pz[0,0]
+
+    print()
+
+    # voxels in view frustrum
+    height, width = features.size()[2:]
+    valid = (px >= 0) & (py >= 0) & (px < width) & (py < height) & (pz>0) # bxhwd
+
+    # put features in volume
+    volume = torch.zeros(batch, channels, nx*ny*nz, dtype=features.dtype, 
+                         device=device)
+    for b in range(batch):
+        volume[b,:,valid[b]] = features[b,:,py[b,valid[b]], px[b,valid[b]]]
+
+    print('Height, Width: ', height, width)
+    print('features: ', features.shape)
+    print('valid: ', valid.shape)
+    print('volume: ', volume.shape)
+    print()
 
     volume = volume.view(batch, channels, nx, ny, nz)
     valid = valid.view(batch, 1, nx, ny, nz)
@@ -125,7 +193,7 @@ class VoxelNet(pl.LightningModule):
         self.voxel_dim_val = cfg.VOXEL_DIM_VAL
         self.voxel_dim_test = cfg.VOXEL_DIM_TEST
         #self.origin = torch.tensor([0, 0, 0]).view(1,3)
-        self.origin = torch.tensor([-3, -3, -2]).view(1,3)
+        self.origin = torch.tensor([-4, -4, -0.5]).view(1,3)
 
         self.batch_size_train = cfg.DATA.BATCH_SIZE_TRAIN
         self.num_frames_train = cfg.DATA.NUM_FRAMES_TRAIN
@@ -141,6 +209,8 @@ class VoxelNet(pl.LightningModule):
         self.test_offset = 0
         self.test_save_path = 0
         self.test_scene = 0
+
+        self.scale = 1
 
         #self.initialize_volume()
 
@@ -188,17 +258,18 @@ class VoxelNet(pl.LightningModule):
         
         ##########################################
         def returnCAM(image, feature):
-            # feature_blobs = []
-            # def hook_feature(module, input, output):
-            #     feature_blobs.append(output.cpu().numpy())
+            pass
+                # feature_blobs = []
+                # def hook_feature(module, input, output):
+                #     feature_blobs.append(output.cpu().numpy())
 
-            # print(self.backbone2d._modules['1']._modules['p5']._modules.get('5'))
-            
-            # self.backbone2d._modules.get('Conv2d').register_forward_hook(hook_feature)
-            # params = list(self.backbone2d.parameters())
-            # weight_softmax = np.squeeze(params[-2].cpu().data.numpy)
-            # print(len(feature_blobs))
-            # print(feature_blobs[0].shape)
+                # print(self.backbone2d._modules['1']._modules['p5']._modules.get('5'))
+                
+                # self.backbone2d._modules.get('Conv2d').register_forward_hook(hook_feature)
+                # params = list(self.backbone2d.parameters())
+                # weight_softmax = np.squeeze(params[-2].cpu().data.numpy)
+                # print(len(feature_blobs))
+                # print(feature_blobs[0].shape)
             size_upsample = (image.shape[-2], image.shape[-1])
             plt.figure()
 
@@ -229,19 +300,13 @@ class VoxelNet(pl.LightningModule):
         # backbone2d reduces the size of the images so we 
         # change intrinsics to reflect this
 
-        # print()
-        # print(projection.shape)
-        # print(projection)
         projection = projection.clone()
-        #self.backbone2d_stride = 40
 
         """ 크기 조절을 위해 projection matrix의
             transform 부분을 1/2으로 변경  """
-        #projection[:,:,-1] = projection[:,:,-1] / 2
+        projection[:,:,-1] = projection[:,:,-1] * self.scale
 
         projection[:,:2,:] = projection[:,:2,:] / self.backbone2d_stride
-        # print(projection)
-        # print('-'*30)
 
         if self.training:
             voxel_dim = self.voxel_dim_train
@@ -255,15 +320,62 @@ class VoxelNet(pl.LightningModule):
             valid.detach_()
 
         self.volume = self.volume + volume
-        #self.volume = volume
         self.valid = self.valid + valid
-        #self.valid = valid
 
-        #print(self.volume.shape, self.valid.shape)
+    def inference1_subvoxel(self, projection, image=None, feature=None):
+        """ Backprojects image features into 3D and accumulates them.
 
-        #print(self.valid.type(), valid.type())
-        #print(self.valid, self.valid.sum())
-        #print(self.volume)
+        This is the first half of the network which is run on every frame.
+        Only pass one of image or feature. If image is passed 2D features
+        are extracted from the image using self.backbone2d. When features
+        are extracted external to this function pass features (used when 
+        passing multiple frames through the backbone2d simultaniously
+        to share BatchNorm stats).
+
+        Args:
+            projection: bx3x4 projection matrix
+            image: bx3xhxw RGB image
+            feature: bxcxh'xw' feature map (h'=h/stride, w'=w/stride)
+
+        Feature volume is accumulated into self.volume and self.valid
+        """
+
+        assert ((image is not None and feature is None) or 
+                (image is None and feature is not None))
+
+        image_ori = image
+        if feature is None:
+            image = self.normalizer(image)
+            feature = self.backbone2d(image)
+
+        # backbone2d reduces the size of the images so we 
+        # change intrinsics to reflect this
+
+        projection = projection.clone()
+
+        """ 크기 조절을 위해 projection matrix의
+            transform 부분을 1/2으로 변경  """
+        projection[:,:,-1] = projection[:,:,-1] * self.scale
+
+        projection[:,:2,:] = projection[:,:2,:] / self.backbone2d_stride
+
+        if self.training:
+            voxel_dim = self.voxel_dim_train
+        else:
+            voxel_dim = self.voxel_dim_val
+        volume, valid = backproject_subvoxel(voxel_dim, self.voxel_size, self.origin,
+                                    projection, feature)
+
+        if self.finetune3d:
+            volume.detach_()
+            valid.detach_()
+
+        #self.volume = self.volume + volume
+        #self.valid = self.valid + valid
+
+        self.volume = volume
+        self.valid = valid
+
 
     def inference2(self, targets=None):
         """ Refines accumulated features and regresses output TSDF.
@@ -281,8 +393,6 @@ class VoxelNet(pl.LightningModule):
         """
         volume = self.volume/self.valid
         
-        #print(self.volume)
-        #print(self.valid, self.valid.sum())
         # remove nans (where self.valid==0)
         volume = volume.transpose(0,1)
         volume[:,self.valid.squeeze(1)==0]=0
