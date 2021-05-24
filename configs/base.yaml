@@ -1,2 +1,2 @@
 TRAINER:
-  NUM_GPUS: 8
+  NUM_GPUS: 4

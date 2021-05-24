@@ -85,7 +85,7 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
 class VoxelNet(nn.Module):
     """ Network architecture implementing ATLAS (https://arxiv.org/pdf/2003.10432.pdf)"""
 
-    def __init__(self, hparams, device):
+    def __init__(self, hparams, device="cuda"):
         super().__init__()
 
         self.device = device
@@ -99,6 +99,7 @@ class VoxelNet(nn.Module):
 
         # networks
         self.backbone2d, self.backbone2d_stride = build_backbone2d(cfg)
+        self.backbone2d = self.backbone2d.to(self.device)
         self.backbone3d = build_backbone3d(cfg)
         self.heads2d = PixelHeads(cfg, self.backbone2d_stride)
         self.heads3d = VoxelHeads(cfg)
@@ -224,11 +225,11 @@ class VoxelNet(nn.Module):
 
         self.initialize_volume()
 
-        image = batch['image'].to(self.device)
+        image = batch['image']
         projection = batch['projection'].to(self.device)
 
         # get targets if they are in the batch
-        targets3d = {key:value for key, value.to(self.device) in batch.items() if key[:3]=='vol'}
+        targets3d = {key:value.to(self.device) for key, value in batch.items() if key[:3]=='vol'}
         targets3d = targets3d if targets3d else None
         
         # transpose batch and time so we can accumulate sequentially
@@ -246,12 +247,21 @@ class VoxelNet(nn.Module):
             # use batchnorm => shape: [B,3,h,w] -> [B*3,h,w] => normalize as batch
             image = images.reshape(images.shape[0]*images.shape[1], *images.shape[2:])
             image = self.normalizer(image)
-            features = self.backbone2d(image)
+
+            tmp = None
+            for i in range(image.shape[0]):
+                sub_image = image[i*1:(i+1)*1].to(self.device)
+                features = self.backbone2d(sub_image)
+                if tmp is None:
+                    tmp = features
+                else:
+                    tmp = torch.cat([tmp, features], dim=0)
+            features = tmp
 
             # reshape back
             features = features.view(images.shape[0],
-                                     images.shape[1],
-                                     *features.shape[1:])
+                                    images.shape[1],
+                                    *features.shape[1:])
         
             for projection, feature in zip(projections, features):
                 self.feature_accumulation(projection, feature=feature)
@@ -336,9 +346,10 @@ class VoxelNet(nn.Module):
             info_files, self.num_frames_train, transform,
             self.frame_types, self.frame_selection, self.voxel_types,
             self.voxel_sizes)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
         dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=self.batch_size_train, num_workers=2,
-            collate_fn=collate_fn, shuffle=True, drop_last=True)
+            dataset, batch_size=self.batch_size_train, num_workers=1, pin_memory=True,
+            collate_fn=collate_fn, shuffle=False, drop_last=True, sampler=train_sampler)
         return dataloader
 
     def val_dataloader(self):

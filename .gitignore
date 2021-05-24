@@ -7,7 +7,9 @@ lightning_logs/*
 data*/*
 metadata*/*
 **/snapshot/*
+**/weights/*
 
 *.pyc
 data.zip
 results.zip
+weights.zip
