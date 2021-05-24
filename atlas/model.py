@@ -225,6 +225,7 @@ class VoxelNet(pl.LightningModule):
 
         image = batch['image']
         projection = batch['projection']
+        print('1:',image.shape)
 
         # get targets if they are in the batch
         targets3d = {key:value for key, value in batch.items() if key[:3]=='vol'}
@@ -238,6 +239,7 @@ class VoxelNet(pl.LightningModule):
         # transpose batch and time so we can accumulate sequentially
         images = image.transpose(0,1)
         projections = projection.transpose(0,1)
+        print('2:',image.shape)
 
         if (not self.batch_backbone2d_time) or (not self.training) or self.finetune3d:
             # run images through 2d cnn sequentially and backproject and accumulate
@@ -248,7 +250,21 @@ class VoxelNet(pl.LightningModule):
             # run all images through 2d cnn together to share batchnorm stats
             image = images.reshape(images.shape[0]*images.shape[1], *images.shape[2:])
             image = self.normalizer(image)
-            features = self.backbone2d(image)
+            print('3:',image.shape)
+            # features = self.backbone2d(image)
+
+            tmp = None
+            for i in range(50):
+                sub_image = image[i*1:(i+1)*1]
+                print(sub_image.shape)
+                features = self.backbone2d(image)
+                print('f:', features.shape)
+                if tmp is None:
+                    tmp = features
+                else:
+                    tmp = torch.cat([tmp, features], dim=0)
+            features = tmp
+            print('f2:', features.shape)
 
             # run 2d heads
             if targets2d is not None:

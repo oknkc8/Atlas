@@ -57,8 +57,9 @@ if __name__ == "__main__":
         distributed_backend='ddp',
         benchmark=True,
         gpus=cfg.TRAINER.NUM_GPUS,
-        precision=cfg.TRAINER.PRECISION,
-        amp_level='O1')
+        #precision=cfg.TRAINER.PRECISION,
+        #amp_level='00')
+        precision=32)
     
     trainer.fit(model)
 
