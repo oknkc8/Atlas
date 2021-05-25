@@ -348,7 +348,7 @@ class VoxelNet(nn.Module):
             self.voxel_sizes)
         train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
         dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=self.batch_size_train, num_workers=1, pin_memory=True,
+            dataset, batch_size=self.batch_size_train, num_workers=self.cfg.DATA.NUM_WORKERS, pin_memory=True,
             collate_fn=collate_fn, shuffle=False, drop_last=True, sampler=train_sampler)
         return dataloader
 
