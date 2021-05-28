@@ -24,11 +24,12 @@ import torch.distributed as dist
 from atlas.config import get_parser, get_cfg
 from atlas.logger_pytorch import AtlasLogger
 from atlas.model_pytorch import VoxelNet
+#from atlas.model_pytorch_idea1 import VoxelNet
 
 from tqdm import tqdm
 import datetime
 
-def main_worker(gpu, ngpus_per_node, cfg):
+def main_worker(gpu, ngpus_per_node, cfg, checkpoint):
     torch.distributed.init_process_group(
             backend='nccl',
             init_method='tcp://127.0.0.1:3456',
@@ -36,6 +37,15 @@ def main_worker(gpu, ngpus_per_node, cfg):
             rank=gpu)
 
     model = VoxelNet(cfg.convert_to_dict())
+    start_epoch = 0
+    
+    if checkpoint is not None:
+        ckpt = torch.load(checkpoint)
+        print('[*] Loading checkpoint from %s succeed!' % checkpoint)
+        model.load_state_dict(ckpt['model'])
+        start_epoch = ckpt['epoch'] + 1
+        cfg = ckpt['cfg']
+
 
     timestamp = datetime.datetime.now().strftime("%m-%d-%H:%M")
     result_folder_name = timestamp + '(' + cfg.TRAINER.NAME + '_' + cfg.TRAINER.VERSION + ')'
@@ -62,7 +72,7 @@ def main_worker(gpu, ngpus_per_node, cfg):
     valid_min_loss = 1e10
 
     dist.barrier()
-    for epoch in range(cfg.TRAINER.EPOCH):
+    for epoch in range(start_epoch, cfg.TRAINER.EPOCH):
 
         print('Training...')
         model.train()
@@ -79,7 +89,7 @@ def main_worker(gpu, ngpus_per_node, cfg):
             optimizer.step()
 
             if (i+1) % cfg.TRAINER.LOG_STEP == 0:
-                print("Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(train_loader), total_loss), end=' ')
+                print("[T] Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(train_loader), total_loss), end=' ')
                 for key, loss in losses.items():
                     print("%s: %.5f" % (key, loss), end=' ')
                 print()
@@ -112,7 +122,7 @@ def main_worker(gpu, ngpus_per_node, cfg):
                 else:
                     loss_avg['total_loss'] += total_loss
                 
-                print("Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(train_loader), total_loss.item()), end=' ')
+                print("[V] Epoch:%3d Iter:(%3d/%3d) Total: %.5f" % (epoch+1, i+1, len(val_loader), total_loss.item()), end=' ')
                 for key, loss in losses.items():
                     print("%s: %.5f" % (key, loss.item()), end=' ')
                 print()
@@ -120,8 +130,8 @@ def main_worker(gpu, ngpus_per_node, cfg):
                 pred_tsdfs = model.module.postprocess(outputs)
                 trgt_tsdfs = model.module.postprocess(batch)
 
-                logger.mesh_writer.save_mesh(pred_tsdfs[0], ('%03d_%03d_'%(epoch+1, i+1)) + batch['scene'][0]+'_pred.ply')
-                logger.mesh_writer.save_mesh(trgt_tsdfs[0], ('%03d_%03d_'%(epoch+1, i+1)) + batch['scene'][0]+'_trgt.ply')
+                logger.mesh_writer.save_mesh(pred_tsdfs[0], os.path.join('valid', ('%03d_%03d_'%(epoch+1, i+1)) + batch['scene'][0]+'_pred.ply'))
+                logger.mesh_writer.save_mesh(trgt_tsdfs[0], os.path.join('valid', ('%03d_%03d_'%(epoch+1, i+1)) + batch['scene'][0]+'_trgt.ply'))
             
             print("[Valid Avg] Epoch:%3d" % (epoch+1), end=' ')
             for key, loss in loss_avg.items():
@@ -133,17 +143,17 @@ def main_worker(gpu, ngpus_per_node, cfg):
             valid_min_loss = loss_avg['total_loss'].item()
             
             torch.save({
-                    'model' : model.state_dict(),
+                    'model' : model.module.state_dict(),
                     'epoch' : epoch,
-                    'cfg' : model.cfg
+                    'cfg' : model.module.cfg
                 },
                 os.path.join(checkpoint_path, 'best_model.ckpt')
             )
 
         torch.save({
-                'model' : model.state_dict(),
+                'model' : model.module.state_dict(),
                 'epoch' : epoch,
-                'cfg' : model.cfg
+                'cfg' : model.module.cfg
             },
             os.path.join(checkpoint_path, str(epoch+1) + '.ckpt')
         )
@@ -163,4 +173,4 @@ if __name__ == "__main__":
     ngpus_per_node = len(cfg.TRAINER.GPUS)
     world_size = ngpus_per_node
  
-    torch.multiprocessing.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, cfg, ))
+    torch.multiprocessing.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, cfg, args.checkpoint, ))

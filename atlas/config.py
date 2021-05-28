@@ -53,8 +53,8 @@ _C.DATASETS_VAL = ['data/scannet_val.txt']
 
 _C.DATA = CN()
 _C.DATA.BATCH_SIZE_TRAIN = 1 # batch size per gpu
-_C.DATA.NUM_FRAMES_TRAIN = 5
-_C.DATA.NUM_FRAMES_VAL = 5
+_C.DATA.NUM_FRAMES_TRAIN = 50
+_C.DATA.NUM_FRAMES_VAL = 500
 _C.DATA.NUM_WORKERS = 16
 _C.DATA.FRAME_SELECTION = 'random'
 _C.DATA.RANDOM_ROTATION_3D = True
@@ -154,6 +154,8 @@ def get_parser():
     parser = argparse.ArgumentParser(description="Atlas Training")
     parser.add_argument("--config-file", default="", metavar="FILE", 
         help="path to config file")
+    parser.add_argument("--checkpoint", default=None, type=str,
+        help="path to checkpoint to train contiue")
     parser.add_argument(
         "opts",
         help="Modify config options using the command-line",

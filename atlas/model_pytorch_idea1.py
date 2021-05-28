@@ -25,10 +25,12 @@ from atlas.config import CfgNode
 from atlas.data import ScenesDataset, collate_fn, parse_splits_list
 from atlas.heads2d import PixelHeads
 from atlas.heads3d import VoxelHeads
-from atlas.backbone2d import build_backbone2d
+from atlas.backbone2d_idea1 import build_backbone2d
 from atlas.backbone3d import build_backbone3d
 import atlas.transforms as transforms
 from atlas.tsdf import coordinates, TSDF
+
+from tqdm import tqdm
 
 
 def backproject(voxel_dim, voxel_size, origin, projection, features):
@@ -184,10 +186,12 @@ class VoxelNet(nn.Module):
             volume.detach_()
             valid.detach_()
 
-        self.volume = self.volume + volume
-        self.valid = self.valid + valid
+        #self.volume = self.volume + volume
+        #self.valid = self.valid + valid
 
-    def refine_3d_cnn(self, targets=None):
+        return volume, valid
+
+    def refine_3d_cnn(self, volume, targets=None):
         """ Refines accumulated features and regresses output TSDF.
 
         This is the second half of the network. It should be run once after
@@ -202,12 +206,15 @@ class VoxelNet(nn.Module):
                 if targets is None, losses is empty
         """
 
+
+        """
         volume = self.volume/self.valid
 
         # remove nans (where self.valid==0)
         volume = volume.transpose(0,1)
         volume[:,self.valid.squeeze(1)==0]=0
         volume = volume.transpose(0,1)
+        """
 
         x = self.backbone3d(volume)
         return self.heads3d(x, targets)
@@ -236,40 +243,37 @@ class VoxelNet(nn.Module):
         images = image.transpose(0,1)
         projections = projection.transpose(0,1)
 
-        if (not self.batch_backbone2d_time) or (not self.training) or self.finetune3d:
-            # run images through 2d cnn sequentially and backproject and accumulate
-            # no use batchnorm => normalize each image
-            for image, projection in zip(images, projections):
-                self.feature_accumulation(projection, image=image)
+        """
+            Idea 1
+                1. Extract the feature for each images
+                2. Unproject the feature to exclusive feature volume(c,H,W,D)
+                3. Concatenate a feature volume(c,H,W,D) and existed TSDF volume(1,H,W,D) and set as input
+                4. Refine the volume(c+1,H,W,D) through Encoder-Decoder and regress TSDF.
+        """
 
-        else:
-            # run all images through 2d cnn together to share batchnorm stats
-            # use batchnorm => shape: [B,3,h,w] -> [B*3,h,w] => normalize as batch
-            image = images.reshape(images.shape[0]*images.shape[1], *images.shape[2:])
-            image = self.normalizer(image)
+        prev_tsdf_vol = 0
+        length = len(images)
+        for i, (image, projection) in tqdm(enumerate(zip(images, projections))):
+            feature_vol, valid = self.feature_accumulation(projection, image=image)
 
-            tmp = None
-            for i in range(image.shape[0]):
-                sub_image = image[i*1:(i+1)*1].to(self.device)
-                features = self.backbone2d(sub_image)
-                if tmp is None:
-                    tmp = features
-                else:
-                    tmp = torch.cat([tmp, features], dim=0)
-            features = tmp
+            if i == 0:
+                prev_tsdf_vol = torch.zeros_like(feature_vol, device=self.device)[:,0:1]
 
-            # reshape back
-            features = features.view(images.shape[0],
-                                    images.shape[1],
-                                    *features.shape[1:])
-        
-            for projection, feature in zip(projections, features):
-                self.feature_accumulation(projection, feature=feature)
-
-        # run 3d cnn
-        outputs3d, losses3d = self.refine_3d_cnn(targets3d)
-
-        #return {**outputs2d, **outputs3d}, {**losses2d, **losses3d}
+            #print('feature: ', feature_vol.shape)
+            #print('prev: ', prev_tsdf_vol.shape)
+            concat_vol = torch.cat([feature_vol, prev_tsdf_vol], dim=1)
+            #print('concat_vol:', concat_vol.shape)
+            
+            if i != length - 1:
+                outputs3d, _ = self.refine_3d_cnn(concat_vol, targets=None)
+                key = 'vol_%02d'%self.voxel_sizes[0] # only get vol of final resolution
+                prev_tsdf_vol = outputs3d[key+'_tsdf']
+                #print(outputs3d)
+                
+            else:
+                outputs3d, losses3d = self.refine_3d_cnn(concat_vol, targets=targets3d)
+            #print('prev2: ', prev_tsdf_vol.shape)
+    
         return outputs3d, losses3d
 
 

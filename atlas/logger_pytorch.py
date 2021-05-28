@@ -26,6 +26,7 @@ class MeshWriter:
     def __init__(self, save_path):
         self._save_path = os.path.join(save_path, "train_viz")
         os.makedirs(self._save_path, exist_ok=True)
+        os.makedirs(os.path.join(self._save_path, 'valid'), exist_ok=True)
   
     def save_mesh(self, tsdf, name):
         if 'semseg' in tsdf.attribute_vols:

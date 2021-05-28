@@ -1,8 +1,11 @@
 python train_pytorch.py \
 --config-file ./configs/base.yaml \
-TRAINER.NAME atlas \
-TRAINER.VERSION default \
-TRAINER.GPUS 4,5,6,7 \
+--checkpoint ./results/05-26-17:23\(atlas_pytorch_ori\)/ckpts/best_model.ckpt \
+TRAINER.NAME atlas_pytorch \
+TRAINER.VERSION ori_continue \
+TRAINER.GPUS 0,1,2,3 \
 DATA.NUM_FRAMES_TRAIN 5 \
-DATA.NUM_FRAMES_VAL 5 \
+DATA.NUM_FRAMES_VAL 10 \
 DATA.NUM_WORKERS 16 \
+MODEL.BACKBONE3D.CHANNELS 32,64,128,256 \
+MODEL.HEADS3D.MULTI_SCALE True \
