@@ -30,7 +30,7 @@ from atlas.model import VoxelNet as VoxelNet_Ori
 from tqdm import tqdm
 import datetime
 
-def main_worker(gpu, ngpus_per_node, cfg, checkpoint):
+def main_worker(gpu, ngpus_per_node, cfg, checkpoint=None, model_ori=None):
     torch.distributed.init_process_group(
             backend='nccl',
             init_method='tcp://127.0.0.1:3456',
@@ -47,6 +47,18 @@ def main_worker(gpu, ngpus_per_node, cfg, checkpoint):
         start_epoch = ckpt['epoch'] + 1
         cfg = ckpt['cfg']
 
+    else:
+        if model_ori is not None:
+            if cfg.MODEL.FREEZE_2D:
+                model.backbone2d.load_state_dict(model_ori.backbone2d.state_dict())
+                #cfg.MODEL.FREEZE_2D = True
+            if cfg.MODEL.FREEZE_3D:
+                model.backbone3d.load_state_dict(model_ori.backbone3d.state_dict())
+                model.heads3d.heads[0].load_state_dict(model_ori.heads3d.heads[0].state_dict())
+                #cfg.MODEL.FREEZE_3D = True
+            
+            del model_ori
+            model_ori = 1
 
     timestamp = datetime.datetime.now().strftime("%m-%d-%H:%M")
     result_folder_name = timestamp + '(' + cfg.TRAINER.NAME + '_' + cfg.TRAINER.VERSION + ')'
@@ -68,7 +80,7 @@ def main_worker(gpu, ngpus_per_node, cfg, checkpoint):
     #model = nn.DataParallel(model)
     torch.cuda.set_device(gpu)
     model = model.cuda(gpu)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=True)
 
     valid_min_loss = 1e10
 
@@ -100,6 +112,9 @@ def main_worker(gpu, ngpus_per_node, cfg, checkpoint):
 
                 logger.mesh_writer.save_mesh(pred_tsdfs[0], '%03d_%03d_train_pred.ply'%(epoch+1, i+1))
                 logger.mesh_writer.save_mesh(trgt_tsdfs[0], '%03d_%03d_train_trgt.ply'%(epoch+1, i+1))
+
+            #del outputs, losses
+            torch.cuda.empty_cache()
         
         print('\nValidating...')
         model.eval()
@@ -171,7 +186,12 @@ if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = gpus
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    model_ori = None
+    if cfg.MODEL.FREEZE_2D or cfg.MODEL.FREEZE_3D:
+        checkpoint_ori_path = 'results/release/semseg/final.ckpt'
+        model_ori = VoxelNet_Ori.load_from_checkpoint(checkpoint_ori_path)
+
     ngpus_per_node = len(cfg.TRAINER.GPUS)
     world_size = ngpus_per_node
  
-    torch.multiprocessing.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, cfg, args.checkpoint, ))
+    torch.multiprocessing.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, cfg, args.checkpoint, model_ori))

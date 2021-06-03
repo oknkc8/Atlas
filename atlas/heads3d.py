@@ -32,6 +32,7 @@ class VoxelHeads(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.heads = nn.ModuleList()
+        self.cfg = cfg
 
         if "tsdf" in cfg.MODEL.HEADS3D.HEADS:
             self.heads.append(TSDFHead(cfg))
@@ -48,7 +49,7 @@ class VoxelHeads(nn.Module):
         losses = {}
 
         for head in self.heads:
-            out, loss = head(x, targets)
+            out, loss = head(x, targets, self.cfg.MODEL.FREEZE_3D)
             outputs = { **outputs, **out }
             losses = { **losses, **loss }
 
@@ -86,7 +87,7 @@ class TSDFHead(nn.Module):
         self.decoders = nn.ModuleList(decoders)
 
 
-    def forward(self, xs, targets=None):
+    def forward(self, xs, targets=None, freeze=False):
         output = {}
         losses = {}
         mask_surface_pred = []
@@ -94,6 +95,26 @@ class TSDFHead(nn.Module):
         if not self.multi_scale:
             xs = xs[-1:]
 
+        # if freeze:
+        #     with torch.no_grad():
+        #         for i, (decoder, x) in enumerate(zip(self.decoders, xs)):
+        #             # regress the TSDF
+        #             tsdf = torch.tanh(decoder(x)) * self.label_smoothing
+
+        #             # use previous scale to sparsify current scale
+        #             if self.split_loss=='pred' and i>0:
+        #                 tsdf_prev = output['vol_%02d_tsdf'%self.voxel_sizes[i-1]]
+        #                 tsdf_prev = F.interpolate(tsdf_prev, scale_factor=2)
+        #                 # FIXME: when using float16, why is interpolate casting to float32?
+        #                 tsdf_prev = tsdf_prev.type_as(tsdf)
+        #                 mask_surface_pred_prev = tsdf_prev.abs()<self.sparse_threshold[i-1]
+        #                 # .999 so we don't close surfaces during mc
+        #                 tsdf[~mask_surface_pred_prev] = tsdf_prev[~mask_surface_pred_prev].sign()*.999
+        #                 mask_surface_pred.append( mask_surface_pred_prev )
+
+        #             output['vol_%02d_tsdf'%self.voxel_sizes[i]] = tsdf
+
+        # else:
         for i, (decoder, x) in enumerate(zip(self.decoders, xs)):
             # regress the TSDF
             tsdf = torch.tanh(decoder(x)) * self.label_smoothing

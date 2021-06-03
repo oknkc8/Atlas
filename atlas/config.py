@@ -90,6 +90,8 @@ _C.MODEL = CN()
 #TODO: images are currently loaded RGB, but the pretrained models expect BGR
 _C.MODEL.PIXEL_MEAN = [103.53, 116.28, 123.675]
 _C.MODEL.PIXEL_STD = [1., 1., 1.]
+_C.MODEL.FREEZE_2D = False
+_C.MODEL.FREEZE_3D = False
 
 # for d2 backbone
 _C.MODEL.BACKBONE = CN()
@@ -147,7 +149,15 @@ _C.MODEL.HEADS3D.COLOR.LOSS_WEIGHT = 1.
 
 
 
-
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
 def get_parser():
@@ -156,6 +166,10 @@ def get_parser():
         help="path to config file")
     parser.add_argument("--checkpoint", default=None, type=str,
         help="path to checkpoint to train contiue")
+    parser.add_argument("--use_ori_2d", default=False, type=str2bool,
+        help="boolean value to use original 2d backbone weights")        
+    parser.add_argument("--use_ori_3d", default=False, type=str2bool,
+        help="boolean value to use original 3d backbone weights")        
     parser.add_argument(
         "opts",
         help="Modify config options using the command-line",

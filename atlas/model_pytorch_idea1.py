@@ -215,8 +215,11 @@ class VoxelNet(nn.Module):
         volume[:,self.valid.squeeze(1)==0]=0
         volume = volume.transpose(0,1)
         """
-
-        x = self.backbone3d(volume)
+        if self.cfg.MODEL.FREEZE_3D:
+            with torch.no_grad():
+                x = self.backbone3d(volume)    
+        else:
+            x = self.backbone3d(volume)
         return self.heads3d(x, targets)
 
 
@@ -253,26 +256,27 @@ class VoxelNet(nn.Module):
 
         prev_tsdf_vol = 0
         length = len(images)
-        for i, (image, projection) in tqdm(enumerate(zip(images, projections))):
-            feature_vol, valid = self.feature_accumulation(projection, image=image)
+        for i, (image, projection) in enumerate(zip(images, projections)):
+            if self.cfg.MODEL.FREEZE_2D:
+                with torch.no_grad():
+                    feature_vol, valid = self.feature_accumulation(projection, image=image)
+            else:
+                feature_vol, valid = self.feature_accumulation(projection, image=image)
 
             if i == 0:
                 prev_tsdf_vol = torch.zeros_like(feature_vol, device=self.device)[:,0:1]
 
-            #print('feature: ', feature_vol.shape)
-            #print('prev: ', prev_tsdf_vol.shape)
             concat_vol = torch.cat([feature_vol, prev_tsdf_vol], dim=1)
-            #print('concat_vol:', concat_vol.shape)
             
             if i != length - 1:
                 outputs3d, _ = self.refine_3d_cnn(concat_vol, targets=None)
                 key = 'vol_%02d'%self.voxel_sizes[0] # only get vol of final resolution
                 prev_tsdf_vol = outputs3d[key+'_tsdf']
-                #print(outputs3d)
                 
             else:
                 outputs3d, losses3d = self.refine_3d_cnn(concat_vol, targets=targets3d)
-            #print('prev2: ', prev_tsdf_vol.shape)
+
+        
     
         return outputs3d, losses3d
 
